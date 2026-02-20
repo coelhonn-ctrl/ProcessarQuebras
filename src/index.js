@@ -4,9 +4,9 @@ import readline from "readline";
 import fs from "fs";
 import csv from "csv-parser";
 import { fileURLToPath } from "url";
-import fse from "fs-extra";
+import { performance } from "perf_hooks";
 
-// Importando suas classes de serviço e utilitários
+// Importando serviços
 import { Local } from "./services/Selecionar/OndeClicar.js";
 import { Escrever } from "./services/Selecionar/OqueEscrever.js";
 import { Acordo } from "./services/verificacoes/acordo.js";
@@ -19,100 +19,82 @@ import {
   appendCsvRow,
 } from "./services/util/utils.js";
 
-// Configuração de caminhos e diretórios
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- CONFIGURAÇÕES ---
-const sessionId = "usuario_julia";
-const userDataDir = path.join(__dirname, "sessions", sessionId);
-const caminho_planilha = path.join(process.cwd(), "planilhas", "planilha.csv");
-const urlSistema = "http://172.16.55.252:8080/siscobraweb/servlet/hbranco";
-const totalTelas = 1; // Quantidade de bots rodando simultaneamente
+// --- CONFIGURAÇÕES PARA API / CONTROLLER ---
+const CONFIG = {
+  sessionId: "usuario_julia",
+  userDataDir: path.join(__dirname, "sessions", "usuario_julia"),
+  caminhoPlanilha: path.join(process.cwd(), "planilhas", "planilha.csv"),
+  urlSistema: "http://172.16.55.252:8080/siscobraweb/servlet/hbranco",
+  totalTelas: 1,
+  chromePath: "/usr/bin/google-chrome",
+  logCsv: "tempo_por_processo_08_08.csv"
+};
 
-// Interface para pausar o terminal e aguardar ação do usuário
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-const esperarEnter = () =>
-  new Promise((resolve) => rl.question("", () => resolve()));
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const esperarEnter = () => new Promise((resolve) => rl.question("", () => resolve()));
 
 (async () => {
-  console.log("🚀 Iniciando sistema...");
+  console.log("🚀 [SISTEMA] Iniciando...");
 
   // 1️⃣ CARREGA PLANILHA
   const clientes = [];
-  console.log(`📂 Procurando planilha em: ${caminho_planilha}`);
-
   try {
-    if (!fs.existsSync(caminho_planilha)) {
-      throw new Error(
-        `Arquivo não encontrado! Verifique se ele está em: ${caminho_planilha}`,
-      );
-    }
-
+    if (!fs.existsSync(CONFIG.caminhoPlanilha)) throw new Error("Planilha não encontrada.");
     await new Promise((resolve, reject) => {
-      fs.createReadStream(caminho_planilha)
+      fs.createReadStream(CONFIG.caminhoPlanilha)
         .pipe(csv({ separator: ";" }))
         .on("data", (linha) => {
-          const objetoLimpo = {};
-          for (const key in linha) objetoLimpo[key.trim()] = linha[key];
-          clientes.push(objetoLimpo);
+          const obj = {};
+          for (const key in linha) obj[key.trim()] = linha[key];
+          clientes.push(obj);
         })
-        .on("end", () => {
-          if (clientes.length === 0)
-            return reject(new Error("Planilha vazia!"));
-          console.log(`✅ Planilha carregada: ${clientes.length} registros.`);
-          resolve();
-        })
-        .on("error", (err) => reject(err));
+        .on("end", resolve)
+        .on("error", reject);
     });
+    console.log(`✅ [DADOS] ${clientes.length} registros carregados.`);
   } catch (error) {
-    console.error("💥 Erro ao carregar dados:", error.message);
+    console.error("💥 [ERRO]", error.message);
     process.exit(1);
   }
 
   // 2️⃣ LOGIN MANUAL
   const browserLogin = await puppeteer.launch({
     headless: false,
-    executablePath: "/usr/bin/google-chrome",
-    userDataDir,
+    executablePath: CONFIG.chromePath,
+    userDataDir: CONFIG.userDataDir,
     args: ["--start-maximized"],
   });
-
   const pageLogin = await browserLogin.newPage();
-  await pageLogin.goto(urlSistema);
-
-  console.log("🔐 Faça o login e pressione ENTER no terminal...");
+  await pageLogin.goto(CONFIG.urlSistema);
+  console.log("🔐 [LOGIN] Faça o login e pressione ENTER no terminal...");
   await esperarEnter();
-
-  const cookiesSalvos = await pageLogin.cookies();
   await browserLogin.close();
 
-  // 3️⃣ FUNÇÃO DE PROCESSAMENTO (mantida 100% igual)
+  // 3️⃣ FUNÇÃO DE PROCESSAMENTO
   async function processarDados(page, listaClientes, idBot) {
     const local = new Local();
     const acoes = new Escrever();
     const servicoAcordo = new Acordo();
 
     for (const cliente of listaClientes) {
+      if (!cliente.codigo_cliente) continue;
       const inicioDate = new Date();
-      const inicio = performance.now();
+      const t_inicio = performance.now();
 
       try {
-        if (!cliente.codigo_cliente) continue;
-        console.log(`[Bot ${idBot}] ⏳ Iniciando: ${cliente.nome_cliente}`);
+        console.log(`[Bot ${idBot}] ⏳ Processando: ${cliente.codigo_cliente}`);
 
+        // Pesquisa e Ficha
         await local.pesquisar(page);
         await acoes.escreverCodigo(page, String(cliente.codigo_cliente));
         await local.botaoPesquisar(page);
 
         await new Promise((r) => setTimeout(r, 1500));
         await local.primeiroCliente(page);
-        await page
-          .waitForNetworkIdle({ idleTime: 500, timeout: 5000 })
-          .catch(() => {});
+        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => {});
 
         const [umAcordo, el, frameAcordo] = await servicoAcordo.haQuantos(page);
         if (umAcordo) {
@@ -120,234 +102,115 @@ const esperarEnter = () =>
           await new Promise((r) => setTimeout(r, 2000));
         }
 
-        console.log(`[Bot ${idBot}] Tentando abrir a tela de boletos...`);
+        // Tela de Boletos
         const btnBoleto = await rastreador(page, "span#BOLETO a");
-        if (!btnBoleto) throw new Error("Link 'Boleto' não localizado.");
-
+        if (!btnBoleto) throw new Error("Link 'Boleto' não localizado");
         await btnBoleto.handle.click();
         await new Promise((r) => setTimeout(r, 4000));
 
         const tabela = await rastreadorPotente(page, "table#GRID_BOLETO");
-        if (!tabela?.handle)
-          throw new Error("GRID_BOLETO encontrada, mas sem handle válido.");
+        const tabela_objeto = await servicoAcordo.extrairDadosGridAdaptado(tabela.handle);
+        let linha = await servicoAcordo.verificar_data_de_vencimento(tabela_objeto, cliente.vencimento || cliente.data_vencimento);
 
-        const tabela_objeto = await servicoAcordo.extrairDadosGridAdaptado(
-          tabela.handle,
-        );
+        if (linha === -1 || linha.status !== "Ativo") throw new Error("Boleto inválido/inativo");
 
-        let linha_certa = await servicoAcordo.verificar_data_de_vencimento(
-          tabela_objeto,
-          cliente.vencimento || cliente.data_vencimento,
-        );
-
-        if (linha_certa === -1)
-          throw new Error("Vencimento não encontrado no GRID.");
-
-        if (linha_certa.status !== "Ativo")
-          throw new Error(
-            `Boleto INATIVO (Vencimento: ${linha_certa.vencimento}).`,
-          );
-
-        const botaoImpressao =
-          await local.prucarardentrodeumelementosuandoumseletor(
-            linha_certa.elementHandle,
-            '[id^="_BOLETO_IMP2V"]',
-          );
-
-        if (!botaoImpressao)
-          throw new Error("Botão de impressão não encontrado.");
-
-        await botaoImpressao.click();
+        const btnImpressao = await local.prucarardentrodeumelementosuandoumseletor(linha.elementHandle, '[id^="_BOLETO_IMP2V"]');
+        await btnImpressao.click();
         await new Promise((r) => setTimeout(r, 3000));
 
-        const clicoutudo = await clicarcomvarreduracompleta(page, [
-          'input[name="BTN_SELECIONAR_TUDO"]',
-        ]);
-
-        const clicou = await clicarcomvarreduracompleta(page, [
-          'input[name="BTN_BOLETO_PDF"]',
-        ]);
-
-        if (!clicoutudo) throw new Error("BTN_SELECIONAR_TUDO não encontrado.");
-
-        if (!clicou) throw new Error("BTN_BOLETO_PDF não encontrado.");
-
+        // Impressão PDF
+        await clicarcomvarreduracompleta(page, ['input[name="BTN_SELECIONAR_TUDO"]']);
+        await clicarcomvarreduracompleta(page, ['input[name="BTN_BOLETO_PDF"]']);
         await new Promise((r) => setTimeout(r, 1500));
-        await page.reload({ waitUntil: "networkidle2" });
 
-        const btnBoleto2 = await rastreador(page, "span#BOLETO a");
-        await btnBoleto2.handle.click();
+        // Captura do Link
+        await page.reload({ waitUntil: "networkidle2" });
+        await (await rastreador(page, "span#BOLETO a")).handle.click();
         await new Promise((r) => setTimeout(r, 4000));
 
         const tabela2 = await rastreadorPotente(page, "table#GRID_BOLETO");
-        const tabela_objeto2 = await servicoAcordo.extrairDadosGridAdaptado(
-          tabela2.handle,
-        );
+        const dadosNovos = await servicoAcordo.extrairDadosGridAdaptado(tabela2.handle);
+        linha = await servicoAcordo.verificar_data_de_vencimento(dadosNovos, cliente.vencimento || cliente.data_vencimento);
 
-        linha_certa = await servicoAcordo.verificar_data_de_vencimento(
-          tabela_objeto2,
-          cliente.vencimento || cliente.data_vencimento,
-        );
-
-        if (!linha_certa?.elementHandle)
-          throw new Error("Linha encontrada sem elementHandle.");
-
-        const span = await local.prucarardentrodeumelementosuandoumseletor(
-          linha_certa.elementHandle,
-          '[id^="span__CAMINHOBOLETO"]',
-        );
-
-        if (!span) throw new Error("Span do caminho do boleto não encontrado.");
-
-        const anchor = await span.$("a");
-        if (!anchor) throw new Error("Tag <a> não encontrada dentro do span.");
+        const span = await local.prucarardentrodeumelementosuandoumseletor(linha.elementHandle, '[id^="span__CAMINHOBOLETO"]');
+        const anchor = await span?.$("a");
+        if (!anchor) throw new Error("Link do PDF não encontrado no span");
 
         let caminhoRelativo = null;
-        let tentativas = 0;
-
-        while (!caminhoRelativo && tentativas < 5) {
-          caminhoRelativo = await anchor.evaluate((el) =>
-            el.textContent.trim(),
-          );
-
-          if (!caminhoRelativo) {
-            console.log(`[Bot ${idBot}] ⏳ Aguardando geração do PDF...`);
-            await new Promise((r) => setTimeout(r, 1500));
-            tentativas++;
-          }
+        for (let i = 0; i < 5; i++) {
+          caminhoRelativo = await anchor.evaluate(el => el.textContent.trim());
+          if (caminhoRelativo && caminhoRelativo.length > 5) break;
+          await new Promise(r => setTimeout(r, 1500));
         }
 
-        if (!caminhoRelativo) {
-          throw new Error("PDF não foi gerado a tempo.");
-        }
+        if (!caminhoRelativo) throw new Error("Caminho do PDF não gerado");
 
-        const urlFinal =
-          "http://172.16.55.252:8080/siscobraweb" +
-          caminhoRelativo.replace("..", "");
+        const urlFinal = `${CONFIG.urlSistema.split('/servlet')[0]}${caminhoRelativo.replace("..", "")}`;
+        await downloadPDF(urlFinal, path.resolve(__dirname, "downloads", `${cliente.codigo_cliente}.pdf`));
 
-        console.log("✅ URL final:", urlFinal);
-
-        const outputPath = path.resolve(
-          __dirname,
-          "downloads",
-          `${cliente.codigo_cliente}.pdf`,
-        );
-
-        await downloadPDF(urlFinal, outputPath);
-        console.log("✅ PDF baixado com sucesso:", outputPath);
-
-        await acoes.escreverTextoSeguro(
-          page,
-          "textarea#_RETACA",
-          "encaminhado boleto via whatsapp",
-        );
-
-        const data_agenda = doisDiasUteisAtras(cliente.data_vencimento);
-        await acoes.escreverTextoSeguro(page, "input#_RETDATAGE", data_agenda);
-
+        // Finalização
+        await acoes.escreverTextoSeguro(page, "textarea#_RETACA", "encaminhado boleto via whatsapp");
+        await acoes.escreverTextoSeguro(page, "input#_RETDATAGE", doisDiasUteisAtras(cliente.data_vencimento));
+        
         await page.keyboard.press("Tab");
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 500));
 
-        const elemento_select = await page.$('select[name="_SITCOMCOD"]');
-        if (elemento_select) {
-          await elemento_select.select("58");
-        }
-
-        console.log("🔍 Confirmando registro...");
+        const select = await page.$('select[name="_SITCOMCOD"]');
+        if (select) await select.select("58");
 
         await page.click('input[name="BTN_CONFIRMAR"][value="Confirmar"]');
+        await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
 
-        await page.waitForNavigation({
-          waitUntil: "networkidle2",
-          timeout: 30000,
-        });
+        const t_fim = performance.now();
+        appendCsvRow({
+          vencimento: cliente.vencimento,
+          cliente: cliente.codigo_cliente,
+          inicio: inicioDate.toISOString(),
+          fim: new Date().toISOString(),
+          tempoMs: (t_fim - t_inicio).toFixed(2),
+          status: "OK",
+        }, CONFIG.logCsv);
 
-        console.log("✅ Navegação detectada após confirmação.");
-        const fim = performance.now();
+        console.log(`✅ [SUCESSO] ${cliente.codigo_cliente} em ${(t_fim - t_inicio).toFixed(2)}ms`);
 
-        appendCsvRow(
-          {
-            vencimento: cliente.vencimento,
-            cliente: cliente.codigo_cliente,
-            inicio: inicioDate.toISOString(),
-            fim: new Date().toISOString(),
-            tempoMs: (fim - inicio).toFixed(2),
-            status: "OK",
-          },
-          "tempo_por_processo_08_08.csv",
-        );
-
-        console.log(`⏱️ Tempo: ${(fim - inicio).toFixed(2)} ms`);
-        console.log("====================================================");
       } catch (error) {
-        console.error(
-          `❌ Erro ao processar cliente ${cliente.codigo_cliente}:`,
-          error.message,
-        );
-
-        appendCsvRow(
-          {
-            vencimento: cliente.vencimento,
-            cliente: cliente.codigo_cliente,
-            inicio: new Date().toISOString(),
-            fim: new Date().toISOString(),
-            tempoMs: 0,
-            status: "ERRO",
-          },
-          "tempo_por_processo_08_08.csv",
-        );
+        console.error(`❌ [ERRO] ${cliente.codigo_cliente}: ${error.message}`);
+        appendCsvRow({
+          vencimento: cliente.vencimento,
+          cliente: cliente.codigo_cliente,
+          inicio: new Date().toISOString(),
+          fim: new Date().toISOString(),
+          tempoMs: 0,
+          status: "ERRO",
+        }, CONFIG.logCsv);
       }
     }
   }
 
-  // 4️⃣ GERENCIAMENTO POR ABAS (UM CHROME, VÁRIAS ABAS INDEPENDENTES)
-
-  console.log(`🚀 Preparando ${totalTelas} abas independentes...`);
-
+  // 4️⃣ INICIALIZAÇÃO MULTI-ABA
+  console.log(`🚀 [EXECUÇÃO] Abrindo ${CONFIG.totalTelas} aba(s)...`);
   const browser = await puppeteer.launch({
     headless: "new",
-    executablePath: "/usr/bin/google-chrome",
-    userDataDir,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
+    executablePath: CONFIG.chromePath,
+    userDataDir: CONFIG.userDataDir,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
   });
-  const instancias = [];
-  const fatia = Math.ceil(clientes.length / totalTelas);
 
-  for (let i = 0; i < totalTelas; i++) {
+  const tarefas = [];
+  const fatia = Math.ceil(clientes.length / CONFIG.totalTelas);
+
+  for (let i = 0; i < CONFIG.totalTelas; i++) {
     const page = await browser.newPage();
-
     await page.setViewport({ width: 1920, height: 1080 });
-
-    console.log(`⏳ Inicializando aba ${i + 1}...`);
-
-    await page.goto(urlSistema, {
-      waitUntil: "networkidle2",
-      timeout: 90000,
-    });
-
-    instancias.push({
-      page,
-      lista: clientes.slice(i * fatia, (i + 1) * fatia),
-      id: i + 1,
-    });
-
+    await page.goto(CONFIG.urlSistema, { waitUntil: "networkidle2", timeout: 90000 });
+    
+    const lista = clientes.slice(i * fatia, (i + 1) * fatia);
+    tarefas.push(processarDados(page, lista, i + 1));
     await new Promise((r) => setTimeout(r, 1500));
   }
 
-  console.log("🟢 Todas as abas prontas. Iniciando bots...");
-
-  await Promise.all(
-    instancias.map((b) => processarDados(b.page, b.lista, b.id)),
-  );
-
-  console.log("🧹 Fechando navegador...");
-
+  await Promise.all(tarefas);
   await browser.close();
-
-  console.log("✅ Fim do processamento.");
+  console.log("🏁 [FIM] Processamento concluído.");
   process.exit(0);
 })();
