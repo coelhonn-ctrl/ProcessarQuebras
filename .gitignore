@@ -1,0 +1,27 @@
+# Dependências
+node_modules/
+
+# Sessões do Puppeteer (Contém cookies e logins)
+src/sessions/
+sessions/
+
+# Arquivos de Dados (Planilhas e Resultados)
+planilhas/*.csv
+*.csv
+processados.txt
+
+# Downloads (Boletos baixados)
+src/downloads/
+downloads/
+
+# Evidências de Erro (Prints de tela)
+*.png
+*.jpg
+*.jpeg
+
+# Configurações sensíveis
+.env
+
+# Logs do Sistema e SO
+npm-debug.log*
+.DS_Store
