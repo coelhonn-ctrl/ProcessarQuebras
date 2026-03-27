@@ -2,7 +2,7 @@ import { localizarNoFrameComPaciencia } from "../util/utils.js";
 
 export class Escrever {
     async escreverCodigo(page, codigo) {
-        const seletor = '#_DEVEDOR_CODIGO';
+        const seletor = '#_ACOCOD';
         
         try {
             // 1. Espera e garante o foco

@@ -8,7 +8,6 @@ sessions/
 # Arquivos de Dados (Planilhas e Resultados)
 planilhas/*.csv
 *.csv
-processados.txt
 
 # Downloads (Boletos baixados)
 src/downloads/

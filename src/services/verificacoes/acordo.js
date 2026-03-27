@@ -1,52 +1,70 @@
 import { rastreador } from "../util/utils.js";
 
 export class Acordo {
-  async haQuantos(page) {
-    const seletor = 'span[id^="span__CONPARACOCOD_"]';
+  async haQuantos(frame, codigoAlvo) {
+    // Busca direto todos os spans de código
+    const spans = await frame.$$('[id^="span__CONPARACOCOD_"]');
 
-    // 1. Usa o rastreador único (reutilização de código!)
-    const alvo = await rastreador(page, seletor, 8000);
+    for (const span of spans) {
+      const codigo = await span.evaluate((el) => el.textContent.trim());
 
-    if (!alvo) {
-      console.log("⚠️ Nenhum acordo listado para este cliente.");
-      return [false, null, null];
-    }
+      if (codigo === codigoAlvo) {
+        // Pega a linha da tabela direto
+        const linha = await span.evaluateHandle((el) => el.closest("tr"));
 
-    const { frame } = alvo;
-
-    try {
-      // 2. Lógica de validação atômica dentro do frame correto
-      const resultado = await frame.evaluate((sel) => {
-        const spans = Array.from(document.querySelectorAll(sel));
-        if (spans.length === 0) return null;
-
-        const textos = spans.map((s) => s.textContent.trim());
-        const primeiro = textos[0];
-        // Verifica se todos os códigos de acordo na tela são o mesmo
-        const todosIguais = textos.every((t) => t === primeiro);
-
-        return {
-          umAcordo: todosIguais,
-          total: textos.length,
-          codigo: primeiro,
-        };
-      }, seletor);
-
-      if (resultado?.umAcordo) {
-        console.log(
-          `✅ Acordo único detectado: ${resultado.codigo} (${resultado.total} linhas).`,
-        );
-        const elementos = await frame.$$(seletor);
-        return [true, elementos[0], frame];
+        return [true, span, frame];
       }
-
-      console.log(`⚠️ Múltiplos acordos ou lista vazia.`);
-      return [false, null, null];
-    } catch (err) {
-      console.error("❌ Erro ao validar grid de acordos:", err.message);
-      return [false, null, null];
     }
+
+    return [false, null, null];
   }
+
+  // async haQuantos(page) {
+  //   const seletor = 'span[id^="span__CONPARACOCOD_"]';
+
+  //   // 1. Usa o rastreador único (reutilização de código!)
+  //   const alvo = await rastreador(page, seletor, 8000);
+
+  //   if (!alvo) {
+  //     console.log("⚠️ Nenhum acordo listado para este cliente.");
+  //     return [false, null, null];
+  //   }
+
+  //   const { frame } = alvo;
+
+  //   try {
+  //     // 2. Lógica de validação atômica dentro do frame correto
+  //     const resultado = await frame.evaluate((sel) => {
+  //       const spans = Array.from(document.querySelectorAll(sel));
+  //       if (spans.length === 0) return null;
+
+  //       const textos = spans.map((s) => s.textContent.trim());
+  //       const primeiro = textos[0];
+  //       // Verifica se todos os códigos de acordo na tela são o mesmo
+  //       const todosIguais = textos.every((t) => t === primeiro);
+
+  //       return {
+  //         umAcordo: todosIguais,
+  //         total: textos.length,
+  //         codigo: primeiro,
+  //       };
+  //     }, seletor);
+
+  //     if (resultado?.umAcordo) {
+  //       console.log(
+  //         `✅ Acordo único detectado: ${resultado.codigo} (${resultado.total} linhas).`,
+  //       );
+  //       const elementos = await frame.$$(seletor);
+  //       return [true, elementos[0], frame];
+  //     }
+
+  //     console.log(`⚠️ Múltiplos acordos ou lista vazia.`);
+  //     return [false, null, null];
+  //   } catch (err) {
+  //     console.error("❌ Erro ao validar grid de acordos:", err.message);
+  //     return [false, null, null];
+  //   }
+  // }
 
   // Transformamos em um método de instância para manter o padrão
   async buscarBotaoBoletoPorData(frame, dataAlvo) {

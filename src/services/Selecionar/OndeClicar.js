@@ -44,6 +44,7 @@ export class Local {
 
     // Objetivo: Clicar no código do acordo selecionado
     async noCodigo(frame, elemento) {
+        console.log("chamando click")
         const id = await frame.evaluate(el => el.id, elemento);
         await frame.click(`#${id}`);
         console.log(`🖱️ Acordo ${id} selecionado.`);
